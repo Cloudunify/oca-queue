@@ -32,12 +32,18 @@ class QueueJob(models.Model):
         self.env.flush_all()
         self.env.cr.execute(
             """
-            SELECT id
-            FROM queue_job
-            WHERE state = 'pending'
-            AND (eta IS NULL OR eta <= (now() AT TIME ZONE 'UTC'))
-            ORDER BY priority, date_created
-            LIMIT 1 FOR NO KEY UPDATE SKIP LOCKED
+            UPDATE queue_job
+            SET state = 'enqueued',
+                date_enqueued = (now() AT TIME ZONE 'UTC')
+            WHERE id = (
+                SELECT id
+                FROM queue_job
+                WHERE state IN ('pending', 'enqueued')
+                AND (eta IS NULL OR eta <= (now() AT TIME ZONE 'UTC'))
+                ORDER BY priority, date_created
+                LIMIT 1 FOR NO KEY UPDATE SKIP LOCKED
+            )
+            RETURNING id
             """
         )
         row = self.env.cr.fetchone()
@@ -129,7 +135,7 @@ class QueueJob(models.Model):
 
     def _ensure_cron_trigger(self):
         """Create cron triggers for these jobs"""
-        records = self.filtered(lambda r: r.state == "pending")
+        records = self.filtered(lambda r: r.state in ("pending", "enqueued"))
         if not records:
             return
         # Trigger immediate runs
